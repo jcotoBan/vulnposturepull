@@ -1,0 +1,22 @@
+# Virtual environment
+.venv/
+
+# Generated CSV reports
+*.csv
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment / secrets
+.env
+*.env
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes

@@ -1,0 +1,9 @@
+Please create a script that pull current customer configurations, but only the followings:
+
+Vulnarbility management policies, and its configurations.
+Posture policies enabled list, and controls associated with each policy enabled.
+
+Please write all that config into a CSV
+
+
+
