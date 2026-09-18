@@ -4,6 +4,7 @@ Pull Sysdig Secure policy configurations to CSV:
   1. vulnerability_policies_report.csv  — VM policies with stages & bundle rules
   2. posture_policies_report.csv        — Enabled posture policies (metadata)
   3. posture_controls_report.csv        — Customer-created (non-system) posture controls
+  4. report_schedules_report.csv        — Configured report schedules
 
 Usage:
     python3 pull_policies.py --url https://app.us4.sysdig.com --token <api-token>
@@ -244,6 +245,118 @@ def fetch_posture_controls():
     return rows
 
 
+# ── Report Schedules ─────────────────────────────────────────────────────────
+
+
+def _schedule_row(source, schedule_id, name, description, enabled, status,
+                  report_name, report_format, compression, schedule_cron,
+                  timezone, time_frame, zones, policies, notification_channels,
+                  entity_type, filters, created_by, created_on, modified_on,
+                  last_scheduled_on, last_completed_on):
+    return {
+        "source": source,
+        "schedule_id": schedule_id,
+        "name": name,
+        "description": description,
+        "enabled": enabled,
+        "status": status,
+        "report_name": report_name,
+        "report_format": report_format,
+        "compression": compression,
+        "schedule_cron": schedule_cron,
+        "timezone": timezone,
+        "time_frame": time_frame,
+        "zones": zones,
+        "policies": policies,
+        "notification_channels": notification_channels,
+        "entity_type": entity_type,
+        "filters": filters,
+        "created_by": created_by,
+        "created_on": created_on,
+        "modified_on": modified_on,
+        "last_scheduled_on": last_scheduled_on,
+        "last_completed_on": last_completed_on,
+    }
+
+
+def fetch_report_schedules():
+    """Return all configured report schedules from both platform and legacy APIs."""
+    rows = []
+
+    # ── Platform (current) reporting ─────────────────────────────────────────
+    print("  Fetching platform report schedules...")
+    for s in api_get("/api/platform/reporting/v1/schedules"):
+        rows.append(_schedule_row(
+            source="platform",
+            schedule_id=s.get("id", ""),
+            name=s.get("name", ""),
+            description=s.get("description", ""),
+            enabled=s.get("enabled", ""),
+            status=s.get("status", ""),
+            report_name=s.get("reportName", ""),
+            report_format=s.get("reportFormat", ""),
+            compression=s.get("compression", ""),
+            schedule_cron=s.get("schedule", ""),
+            timezone=s.get("timezone", ""),
+            time_frame=s.get("timeFrame", ""),
+            zones="; ".join(str(z) for z in s.get("zones") or []),
+            policies="; ".join(str(p) for p in s.get("policies") or []),
+            notification_channels="; ".join(
+                f"{ch.get('type')}({ch.get('id')})"
+                for ch in s.get("notificationChannels") or []
+            ),
+            entity_type="",
+            filters="",
+            created_by=s.get("createdBy", ""),
+            created_on=s.get("createdOn", ""),
+            modified_on=s.get("modifiedOn", ""),
+            last_scheduled_on=s.get("lastScheduledOn", ""),
+            last_completed_on=s.get("lastCompletedOn", ""),
+        ))
+
+    # ── Legacy scanning reporting ─────────────────────────────────────────────
+    print("  Fetching legacy scanning report schedules...")
+    for s in api_get("/api/scanning/reporting/v2/schedules"):
+        # Flatten filters into a readable string
+        condition_filters = s.get("filters", {}).get("conditionFilters", {})
+        scope_filter = s.get("filters", {}).get("scopeFilter", "")
+        filter_parts = [
+            f"{k}={','.join(v.get('value', []))}"
+            for k, v in condition_filters.items()
+            if v.get("value")
+        ]
+        if scope_filter:
+            filter_parts.append(f"scope={scope_filter}")
+        filters_str = "; ".join(filter_parts)
+
+        rows.append(_schedule_row(
+            source="legacy (scanning)",
+            schedule_id=s.get("id", ""),
+            name=s.get("name", ""),
+            description=s.get("description", ""),
+            enabled=s.get("enabled", ""),
+            status="",
+            report_name=s.get("reportType", ""),
+            report_format=s.get("reportFormat", ""),
+            compression=s.get("compression", ""),
+            schedule_cron=s.get("schedule", ""),
+            timezone="",
+            time_frame="",
+            zones="",
+            policies="",
+            notification_channels="",
+            entity_type=s.get("entityType", ""),
+            filters=filters_str,
+            created_by="",
+            created_on=s.get("createdAt", ""),
+            modified_on="",
+            last_scheduled_on=s.get("reportLastScheduledAt", ""),
+            last_completed_on=s.get("reportLastCompletedAt", ""),
+        ))
+
+    return rows
+
+
 # ── CSV Writer ────────────────────────────────────────────────────────────────
 
 
@@ -335,6 +448,22 @@ def main():
         )
     else:
         print("  No customer-created controls found.")
+
+    print("\n=== Report Schedules ===")
+    schedule_rows = fetch_report_schedules()
+    write_csv(
+        "report_schedules_report.csv",
+        schedule_rows,
+        [
+            "source", "schedule_id", "name", "description", "enabled", "status",
+            "report_name", "report_format", "compression",
+            "schedule_cron", "timezone", "time_frame",
+            "zones", "policies", "notification_channels",
+            "entity_type", "filters",
+            "created_by", "created_on", "modified_on",
+            "last_scheduled_on", "last_completed_on",
+        ],
+    )
 
     print("\nDone.")
 
