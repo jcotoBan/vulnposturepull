@@ -9,6 +9,8 @@ Exports your Sysdig Secure policy configurations to CSV files for auditing, repo
 | `vulnerability_policies_report.csv` | All VM policies with their active stages, rule bundles, and predicate conditions |
 | `posture_policies_report.csv` | All enabled posture/compliance policies with metadata |
 | `posture_controls_report.csv` | Customer-created (non-system) posture controls |
+| `report_schedules_report.csv` | All configured report schedules (platform and legacy scanning) |
+| `kspm_migration_report.csv` | KSPM migration status per cluster (new KSPM vs old benchmark runner) |
 
 ### Vulnerability policies CSV columns
 
@@ -88,10 +90,45 @@ Arguments take precedence over environment variables when both are set.
 The token needs read access to:
 - Vulnerability Management policies and bundles
 - Posture policies and controls (`cspm.policies.read`)
+- Report schedules
+- SysQL query execution (for KSPM migration check)
+
+---
+
+## Report schedules CSV columns
+
+| Column | Description |
+|---|---|
+| `source` | `platform` (current API) or `legacy (scanning)` |
+| `schedule_id` | Schedule ID |
+| `name` | Schedule name |
+| `enabled` | Whether the schedule is active |
+| `status` | Schedule status (platform only) |
+| `report_name` | Report type being generated |
+| `report_format` | Output format (csv, pdf, ndjson) |
+| `schedule_cron` | Cron expression for the schedule |
+| `timezone` | Timezone for the schedule (platform only) |
+| `zones` / `policies` | Zones and policies scoped to this schedule (platform only) |
+| `notification_channels` | Delivery channels (platform only) |
+| `entity_type` / `filters` | Scope filters (legacy only) |
+
+---
+
+## KSPM migration CSV columns
+
+| Column | Description |
+|---|---|
+| `cluster` | Kubernetes cluster name |
+| `status` | `new_only` — KSPM or sysdig-shield detected; `old_only` — node-analyzer/bench-runner only; `migrating` — both found |
+| `new_components` | Workload names matching the new KSPM stack |
+| `old_components` | Workload names matching the old benchmark runner stack |
+
+> This section requires the SysQL API. On on-premises installs where SysQL is unavailable, a warning is printed and `kspm_migration_report.csv` is not written.
 
 ---
 
 ## Notes
 
 - **Posture controls per policy** — the Sysdig CSPM API does not expose the policy→requirements→controls mapping through any public endpoint. Controls are exported as a separate file. If no customer-created controls exist, `posture_controls_report.csv` is not written.
-- **Pagination** — all three sections paginate fully regardless of data volume. VM policies use cursor-based pagination; posture endpoints page until an empty response is returned.
+- **Pagination** — all sections paginate fully regardless of data volume. VM policies use cursor-based pagination; posture endpoints page until an empty response is returned.
+- **On-premises compatibility** — the legacy scanning schedules endpoint and the SysQL API may not be available on all on-premises versions. Both sections fail gracefully with a warning if the endpoint returns an error.
