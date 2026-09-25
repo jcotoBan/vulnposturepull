@@ -5,6 +5,7 @@ Pull Sysdig Secure policy configurations to CSV:
   2. posture_policies_report.csv        — Enabled posture policies (metadata)
   3. posture_controls_report.csv        — Customer-created (non-system) posture controls
   4. report_schedules_report.csv        — Configured report schedules
+  5. kspm_migration_report.csv          — KSPM vs old benchmark runner per cluster
 
 Usage:
     python3 pull_policies.py --url https://app.us4.sysdig.com --token <api-token>
@@ -316,7 +317,13 @@ def fetch_report_schedules():
 
     # ── Legacy scanning reporting ─────────────────────────────────────────────
     print("  Fetching legacy scanning report schedules...")
-    for s in api_get("/api/scanning/reporting/v2/schedules"):
+    try:
+        legacy_schedules = api_get("/api/scanning/reporting/v2/schedules")
+    except requests.HTTPError as e:
+        print(f"  Warning: legacy scanning reporting unavailable ({e}) — skipping.")
+        legacy_schedules = []
+
+    for s in legacy_schedules:
         # Flatten filters into a readable string
         condition_filters = s.get("filters", {}).get("conditionFilters", {})
         scope_filter = s.get("filters", {}).get("scopeFilter", "")
@@ -353,6 +360,81 @@ def fetch_report_schedules():
             last_scheduled_on=s.get("reportLastScheduledAt", ""),
             last_completed_on=s.get("reportLastCompletedAt", ""),
         ))
+
+    return rows
+
+
+# ── KSPM Migration Check ─────────────────────────────────────────────────────
+
+_NEW_PATTERN = r"(?i).*(kspm-analyzer|sysdig-shield).*"
+_OLD_PATTERN = r"(?i).*(node-analyzer|bench-runner|node-benchmark-runner).*"
+
+
+def _run_sysql(query):
+    resp = SESSION.post(
+        f"{BASE_URL}/api/sysql/v1/query",
+        json={"query": query},
+        timeout=60,
+    )
+    resp.raise_for_status()
+    return resp.json().get("items", [])
+
+
+class SysQLUnavailable(Exception):
+    pass
+
+
+def _fetch_kspm_components(pattern, label):
+    print(f"  Querying for {label} components...")
+    query = (
+        f"MATCH KubeWorkload "
+        f"WHERE KubeWorkload.name =~ '{pattern}' "
+        f"RETURN DISTINCT KubeWorkload.clusterName, KubeWorkload.name, "
+        f"KubeWorkload.type, KubeWorkload.namespaceName;"
+    )
+    try:
+        items = _run_sysql(query)
+    except requests.HTTPError as e:
+        raise SysQLUnavailable(e) from e
+    print(f"    Found {len(items)} workload(s)")
+    return items
+
+
+def fetch_kspm_migration():
+    """Classify each cluster as new_only, old_only, or migrating."""
+    try:
+        new_items = _fetch_kspm_components(_NEW_PATTERN, "new (kspm-analyzer / sysdig-shield)")
+        old_items = _fetch_kspm_components(_OLD_PATTERN, "old (node-analyzer / bench-runner)")
+    except SysQLUnavailable as e:
+        print(f"  Warning: SysQL API unavailable ({e}) — skipping KSPM migration check.")
+        return []
+
+    new_clusters = {i.get("KubeWorkload.clusterName"): i for i in new_items}
+    old_clusters = {i.get("KubeWorkload.clusterName"): i for i in old_items}
+    all_clusters = sorted(set(new_clusters) | set(old_clusters))
+
+    rows = []
+    for cluster in all_clusters:
+        has_new = cluster in new_clusters
+        has_old = cluster in old_clusters
+        status = "migrating" if (has_new and has_old) else ("new_only" if has_new else "old_only")
+        rows.append({
+            "cluster": cluster,
+            "status": status,
+            "new_components": "; ".join(
+                i["KubeWorkload.name"] for i in new_items
+                if i.get("KubeWorkload.clusterName") == cluster
+            ),
+            "old_components": "; ".join(
+                i["KubeWorkload.name"] for i in old_items
+                if i.get("KubeWorkload.clusterName") == cluster
+            ),
+        })
+
+    for status in ("old_only", "migrating", "new_only"):
+        matches = [r["cluster"] for r in rows if r["status"] == status]
+        if matches:
+            print(f"  {status}: {', '.join(matches)}")
 
     return rows
 
@@ -464,6 +546,15 @@ def main():
             "last_scheduled_on", "last_completed_on",
         ],
     )
+
+    print("\n=== KSPM Migration Check ===")
+    kspm_rows = fetch_kspm_migration()
+    if kspm_rows:
+        write_csv(
+            "kspm_migration_report.csv",
+            kspm_rows,
+            ["cluster", "status", "new_components", "old_components"],
+        )
 
     print("\nDone.")
 
